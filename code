@@ -1,0 +1,134 @@
+from fractions import Fraction as F
+import numpy as np
+
+# ---------------------------------------------------------------- Ejercicio 1
+def ejercicio1(eps=1e-3):
+    print("=== Ejercicio 1: Gran M ===")
+    try:
+        from scipy.optimize import linprog
+    except ImportError:
+        print("scipy no disponible; se omite."); return
+    best = None
+    for d in (0, 1):
+        # max 2x1+4x2+3d ; x1+2x2<=4 ; restricciones Big-M con d fijo
+        A = [[1, 2], [-1, 1], [1, -1]]                      # x1+2x2<=4 ; -(x1-x2) <= 2-d ; x1-x2 <= -1-eps+(5+eps)d
+        b = [4, 2 - d, -1 - eps + (5 + eps) * d]
+        r = linprog([-2, -4], A_ub=A, b_ub=b, bounds=[(0, None)] * 2)
+        if r.success:
+            z = -r.fun + 3 * d
+            print(f" delta={d}: x={np.round(r.x,4)}, z={z:.4f}")
+            if best is None or z > best[0]: best = (z, d, r.x)
+    print(f" Óptimo MILP: z={best[0]:.4f}, delta={best[1]}, x={np.round(best[2],4)}")
+
+# ---------------------------------------------------------------- Ejercicio 2
+c = [10, 14, 31, 48, 60]
+a = [2, 3, 4, 6, 8]
+CAP = 11
+n = len(c)
+orden = sorted(range(n), key=lambda j: F(c[j], a[j]), reverse=True)
+
+def relajacion(fix):
+    """LP de la mochila con variables fijadas (dict j->0/1), solución voraz exacta."""
+    cap = CAP - sum(a[j] for j, v in fix.items() if v == 1)
+    if cap < 0: return None
+    x = {j: F(v) for j, v in fix.items()}
+    z = sum(c[j] for j, v in fix.items() if v == 1)
+    for j in orden:
+        if j in fix: continue
+        if a[j] <= cap:
+            x[j] = F(1); cap -= a[j]; z += c[j]
+        else:
+            x[j] = F(cap, a[j]); z += c[j] * x[j]; cap = 0
+    return z, x
+
+def bb():
+    print("\n=== Ejercicio 2a: Branch & Bound (DFS, rama x_j=0 primero) ===")
+    inc = [F(-1), None]
+    cnt = [0]
+    def rec(fix, nivel, etiqueta):
+        cnt[0] += 1
+        ind = "   " * nivel
+        r = relajacion(fix)
+        if r is None:
+            print(f"{ind}{etiqueta}: INFACTIBLE"); return
+        z, x = r
+        xs = "(" + ", ".join(str(x[j]) for j in range(n)) + ")"
+        if z <= inc[0]:
+            print(f"{ind}{etiqueta}: z={float(z):.4f} x={xs}  PODADO por cota (<= {inc[0]})"); return
+        frac = [j for j in range(n) if x[j].denominator != 1]
+        if not frac:
+            print(f"{ind}{etiqueta}: z={z} x={xs}  ENTERA -> incumbente")
+            inc[0], inc[1] = z, x; return
+        j = frac[0]
+        print(f"{ind}{etiqueta}: z={float(z):.4f} x={xs}  ramifica en x{j+1}")
+        for v in (0, 1):
+            f2 = dict(fix); f2[j] = v
+            rec(f2, nivel + 1, f"x{j+1}={v}")
+    rec({}, 0, "N0")
+    x = inc[1]
+    print(f" Nodos explorados: {cnt[0]}")
+    print(f" Óptimo entero: z*={inc[0]}, x*={[int(x[j]) for j in range(n)]}")
+    # verificación por enumeración
+    import itertools
+    mejor = max((sum(ci*xi for ci, xi in zip(c, s)), s) for s in itertools.product([0,1], repeat=n)
+                if sum(ai*xi for ai, xi in zip(a, s)) <= CAP)
+    print(f" Enumeración completa: z*={mejor[0]}, x*={list(mejor[1])}")
+
+def dual():
+    print("\n=== Ejercicio 2b: dual de la relajación LP (con 0<=x<=1) ===")
+    z, x = relajacion({})
+    print(f" LP: z={z}={float(z)}, x={[str(x[j]) for j in range(n)]}")
+    j_frac = [j for j in range(n) if 0 < x[j] < 1][0]
+    lam = F(c[j_frac], a[j_frac])
+    mu = [max(F(0), c[j] - a[j] * lam) if x[j] == 1 else F(0) for j in range(n)]
+    val = CAP * lam + sum(mu)
+    print(f" lambda={lam}, mu={[str(m) for m in mu]}, valor dual={val}")
+    factible = all(a[j]*lam + mu[j] >= c[j] for j in range(n))
+    print(f" Factible dual: {factible}; dualidad fuerte: {val == z}")
+
+    print("\n=== Ejercicio 2c: dual entero ===")
+    filas = []
+    for l in range(0, 12):
+        m = [max(0, c[j] - a[j]*l) for j in range(n)]
+        filas.append((CAP*l + sum(m), l, m))
+    for g, l, m in filas:
+        if 4 <= l <= 10: print(f" lambda={l:2d}  mu={m}  g={g}")
+    g, l, m = min(filas)
+    xe = [0, 0, 1, 1, 0]
+    print(f" Dual entero óptimo: lambda={l}, mu={m}, valor={g}  (brecha con 79: {g-79})")
+    print(f" CS capacidad: lambda*(11 - sum a x) = {l*(CAP - sum(ai*xi for ai, xi in zip(a, xe)))}  (debe ser 0)")
+    for j in range(n):
+        t = xe[j] * (a[j]*l + m[j] - c[j]); t2 = m[j]*(1 - xe[j])
+        print(f"   j={j+1}: x_j(a_j*lam+mu_j-c_j) = {t},  mu_j(1-x_j) = {t2}")
+
+# ---------------------------------------------------------------- Ejercicio 3
+def ejercicio3():
+    print("\n=== Ejercicio 3: Boyd 4.3 ===")
+    P = np.array([[13, 12, -2], [12, 17, 6], [-2, 6, 12]], float)
+    q = np.array([-22, -14.5, 13])
+    xs = np.array([1, 0.5, -1])
+    print(" autovalores de P:", np.round(np.linalg.eigvalsh(P), 4), " det P =", round(np.linalg.det(P), 4))
+    g = P @ xs + q
+    print(" gradiente en x*:", g)
+    # comparación con solución por proyección de gradiente
+    x = np.zeros(3); L = np.linalg.eigvalsh(P).max()
+    for _ in range(20000):
+        x = np.clip(x - (P @ x + q) / L, -1, 1)
+    print(" proyección de gradiente converge a:", np.round(x, 6))
+    f = lambda v: 0.5*v@P@v + q@v + 1
+    print(f" f(x*) = {f(xs)}")
+
+# ---------------------------------------------------------------- Ejercicio 4
+def ejercicio4():
+    print("\n=== Ejercicio 4 ===")
+    H = np.array([[4, 1, 0], [1, 2, 1], [0, 1, 2]], float)
+    g = np.array([-6, -7, -8], float)
+    x = np.linalg.solve(H, -g)
+    print(" punto crítico:", x, "= (6/5, 6/5, 17/5) =", np.array([6, 6, 17]) / 5)
+    print(" menores principales:", H[0, 0], np.linalg.det(H[:2, :2]), round(np.linalg.det(H), 6))
+    print(" autovalores de H:", np.round(np.linalg.eigvalsh(H), 4))
+    f = lambda v: 2*v[0]**2 + v[0]*v[1] + v[1]**2 + v[1]*v[2] + v[2]**2 - 6*v[0] - 7*v[1] - 8*v[2] + 9
+    print(f" f* = {f(x):.6f}  (= -62/5 = {-62/5})")
+
+if __name__ == "__main__":
+    ejercicio1(); bb(); dual(); ejercicio3(); ejercicio4()
